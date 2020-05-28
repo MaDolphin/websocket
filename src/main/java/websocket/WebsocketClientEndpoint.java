@@ -1,27 +1,33 @@
 package websocket;
 
 import java.net.URI;
-import javax.websocket.ClientEndpoint;
-import javax.websocket.CloseReason;
-import javax.websocket.ContainerProvider;
-import javax.websocket.OnClose;
-import javax.websocket.OnMessage;
-import javax.websocket.OnOpen;
-import javax.websocket.Session;
-import javax.websocket.WebSocketContainer;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import javax.websocket.*;
+import java.io.IOException;
 
+import static org.junit.Assert.fail;
 
 @ClientEndpoint
-public class WebsocketClientEndpoint {
-
-  Session userSession = null;
+public class WebSocketClientEndpoint {
+  private Session currentSession = null;
   private MessageHandler messageHandler;
+  private OnOpenCallback<WebSocketClientEndpoint> onOpenCallback;
 
-  public WebsocketClientEndpoint(URI endpointURI) {
+  public static WebSocketClientEndpoint connect(URI endpointURI, OnOpenCallback<WebSocketClientEndpoint> onOpenCallback, MessageHandler msgHandler) {
+    WebSocketClientEndpoint endpoint = new WebSocketClientEndpoint();
+
     try {
-      WebSocketContainer container = ContainerProvider.getWebSocketContainer();
-      container.connectToServer(this, endpointURI);
-    } catch (Exception e) {
+      final WebSocketContainer container = ContainerProvider.getWebSocketContainer();
+
+      System.out.println("creating websocket");
+      endpoint.onOpenCallback = onOpenCallback;
+      endpoint.messageHandler = msgHandler;
+      endpoint.currentSession = container.connectToServer(endpoint, endpointURI);
+
+      return endpoint;
+    }
+    catch (Exception e) {
       throw new RuntimeException(e);
     }
   }
@@ -34,19 +40,24 @@ public class WebsocketClientEndpoint {
   @OnOpen
   public void onOpen(Session userSession) {
     System.out.println("opening websocket");
-    this.userSession = userSession;
+    this.currentSession = userSession;
+
+    final ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(1);
+    executor.schedule(() -> {
+      this.onOpenCallback.onOpen(this);
+    }, 500, TimeUnit.MILLISECONDS);
   }
 
   /**
    * Callback hook for Connection close events.
    *
    * @param userSession the userSession which is getting closed.
-   * @param reason the reason for connection close
+   * @param reason      the reason for connection close
    */
   @OnClose
   public void onClose(Session userSession, CloseReason reason) {
     System.out.println("closing websocket");
-    this.userSession = null;
+    this.currentSession = null;
   }
 
   /**
@@ -62,11 +73,21 @@ public class WebsocketClientEndpoint {
   }
 
   /**
+   * Callback when any error occurs
+   *
+   * @param throwable
+   */
+  @OnError
+  public void onError(Throwable throwable) {
+    fail("onError in session: " + throwable);
+  }
+
+  /**
    * register message handler
    *
    * @param msgHandler
    */
-  public void addMessageHandler(MessageHandler msgHandler) {
+  public void setMessageHandler(MessageHandler msgHandler) {
     this.messageHandler = msgHandler;
   }
 
@@ -76,16 +97,15 @@ public class WebsocketClientEndpoint {
    * @param message
    */
   public void sendMessage(String message) {
-    this.userSession.getAsyncRemote().sendText(message);
+    this.currentSession.getAsyncRemote().sendText(message);
   }
 
   /**
-   * Message handler.
+   * close the existing session
    *
-   * @author Jiji_Sasidharan
+   * @throws IOException
    */
-  public static interface MessageHandler {
-
-    public void handleMessage(String message);
+  public void close() throws IOException {
+    this.currentSession.close();
   }
 }
